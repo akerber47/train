@@ -3,3 +3,4 @@
 !*.c
 !.gitignore
 !Makefile
+!README
