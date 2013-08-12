@@ -12,7 +12,7 @@ clean:
 	rm -f $(C_TARGETS) $(C_OBJS)
 
 $(HS_TARGETS): %: %.hs
-	ghc -Wall -fwarn-tabs -fwarn-incomplete-record-updates -fwarn-monomorphism-restriction -fwarn-unused-do-bin $<
+	ghc -Wall -fwarn-tabs -fwarn-incomplete-record-updates -fwarn-monomorphism-restriction -fwarn-unused-do-bind $<
 
 $(C_TARGETS): %: %.c
 	gcc -g3 -Wall -Wextra -o $@ $<
