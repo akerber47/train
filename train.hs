@@ -11,10 +11,15 @@ type SpineGraph = Array Vertex [Vertex]
 -- Since SpineGraph is (internally) the same type as Data.Graph.Graph, all
 -- imported functions will work on SpineGraph, but may not construct a graph
 -- with the necessary cyclic order properties.
+-- By convention, since our graphs are undirected, we store all edges pointing
+-- in both directions, so builtin functions like dfs, etc. work correctly. This
+-- means that any fixed-edge filtering operation, spine graph constructor, etc.
+-- will consume/produce this duplicate data.
 
--- Map sends vertices to vertices, and edges (pairs of vertices) to edge paths
+-- Map sends vertices to vertices, and edges (pairs of vertices) to edge paths.
+-- Maps implemented with arrays for ease of updating (with //).
 -- [BH] g: G -> G
-type GraphMap = (SpineGraph, Vertex -> Vertex, Edge -> [Edge])
+type GraphMap = (SpineGraph, Array Vertex Vertex, Array Edge [Edge])
 
 -- Link of vertex is precisely the adjacency list
 -- [BH] Lk(v, G)
@@ -24,7 +29,13 @@ link = (!)
 -- Derivative of map
 -- [BH] Dg(v) : d \in Lk(v,G) |-> Dg(d) \in Lk(g(v),G)
 derivative :: GraphMap -> Vertex -> Vertex -> Vertex
-derivative (_,_,emap) v d = snd $ head $ emap (v, d)
+derivative (_,_,emap) v d = snd $ head $ emap ! (v, d)
+
+-- Removes the given edges from a graph. Preserves cyclic order
+-- of the remaining edges. Note that we remove edges going both ways
+-- even if our list of edges is one-directional.
+deleteEdges :: SpineGraph -> [Edge] -> SpineGraph
+deleteEdges sg =  (\(v1,v2) -> 
 
 -- Implementations of the fibered surface moves.
 -- 1. Collapse invariant forest
@@ -33,9 +44,9 @@ derivative (_,_,emap) v d = snd $ head $ emap (v, d)
 -- non-overlapping, then collapse them.
 
 collapse :: GraphMap -> GraphMap
-collapse g@(sg, vmap, emap) = foldl collapseTree g nubInvForest
-    where invVertices  = filter (\v -> v == vmap v) $ vertices sg
-          invEdges     = filter (\e -> [e] == emap e) $ edges sg
+collapse (sg, vmap, emap) = foldl collapseTree g nubInvForest
+    where invVertices  = filter (\v -> v == vmap ! v) $ vertices sg
+          invEdges     = filter (\e -> [e] == emap ! e) $ edges sg
           invForest   :: [Tree Vertex]
           invForest    = dfs invVertices $ buildG (vertices sg) invEdges
           -- Remove overlaps to get nubInvForest
@@ -43,11 +54,14 @@ collapse g@(sg, vmap, emap) = foldl collapseTree g nubInvForest
           -- transitive) so nubBy may accidentally remove too many elements from
           -- this list. But that's ok bc collapse is not guaranteed to collapse
           -- the largest possible invariant forest anyways.
-          nubInvForest = nubBy (\t1 t2 ->
-                          null $ intersect (flatten t1) (flatten t2)) invForest
+          nubInvForest = nubBy (\t1 t2 -> not $ null $
+                          intersect (flatten t1) (flatten t2)) invForest
           -- Remove the given tree from the graph (map), replacing it with a
-          -- single vertex.
+          -- single vertex. This is tricky bc we need to keep get the cyclic
+          -- order correct at the new (collapsed) vertex.
           collapseTree :: GraphMap -> Tree Vertex -> GraphMap
+          collapseTree g (Tree v []) = g -- trivial (one-vertex) case
+          
 
 -- Sums primes up to nth (yay lazy evaluation!)
 sumPrimesTo :: Integer -> Integer
