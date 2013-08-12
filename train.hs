@@ -2,40 +2,65 @@ import Data.Array
 import Data.Graph
 import Data.Tree
 import Data.List
+import qualified Data.Map.Lazy as M
 
 -- Represents a graph which is the spine of a (fibered) surface. Note that the
 -- adjacency lists are stored in cyclic order (as in Toby Hall's Trains program)
--- for the Bestvina-Handel algorithm.
--- [BH] G
-type SpineGraph = Array Vertex [Vertex]
--- Since SpineGraph is (internally) the same type as Data.Graph.Graph, all
--- imported functions will work on SpineGraph, but may not construct a graph
--- with the necessary cyclic order properties.
+-- for the Bestvina-Handel algorithm. We also keep track of the "zones" (regions
+-- in the surface) that each edge travels through, in order. We'll store the
+-- surface and its zones with a (fixed) representation later. Note that we don't
+-- need to store the zone data of the vertices as this is easy to recover from
+-- the zone data on the edges.
 -- By convention, since our graphs are undirected, we store all edges pointing
 -- in both directions, so builtin functions like dfs, etc. work correctly. This
 -- means that any fixed-edge filtering operation, spine graph constructor, etc.
 -- will consume/produce this duplicate data.
+-- Finally, note that there may be multiple edges between any pair of vertices
+-- (that is, our graph may not be simple). We represent this by storing the same
+-- vertex multiple times in the adjacency list.
+-- [BH] G
+type Zone = Int
+type SpineGraph = M.Map Vertex [(Vertex, [Zone])]
 
--- Map sends vertices to vertices, and edges (pairs of vertices) to edge paths.
--- Maps implemented with arrays for ease of updating (with //).
+-- Edge in a SpineGraph, with zone data.
+type SpineEdge = (Vertex, Vertex, [Zone])
+
+-- Convert a SpineGraph into a Data.Graph.Graph by forgetting zone data, and
+-- converting the Map into an Array.
+toGraph :: SpineGraph -> Graph
+toGraph sg = fmap (map fst) $
+    array (fst $ M.findMin sg, fst $ M.findMax sg) (M.toList sg)
+
+-- Convert a SpineEdge into a Data.Graph.Edge by forgetting zone data
+toEdge :: SpineEdge -> Edge
+toEdge (v1,v2,zs) = (v1,v2)
+
+sgVertices :: SpineGraph -> [Vertex]
+sgVertices = M.keys
+
+-- Incidence list (with zone data) of SpineGraph. Note that this loses cyclic
+-- order of edges incident at each vertex.
+sgEdges :: SpineGraph -> [SpineEdge]
+sgEdges sg = concat [[(v1,v2,zs) | (v2,zs) <- vzs] | (v1,vzs) <- M.toList sg]
+
+-- Map sends vertices to vertices, and edges to edge paths.
+-- Maps implemented with Data.Map (dicts) for ease of updating (with insert).
+-- Note that arrays don't work so well bc SpineEdges lack good Ix behavior.
 -- [BH] g: G -> G
-type GraphMap = (SpineGraph, Array Vertex Vertex, Array Edge [Edge])
+type GraphMap = (SpineGraph, M.Map Vertex Vertex, M.Map SpineEdge [SpineEdge])
 
 -- Link of vertex is precisely the adjacency list
+-- Returns Nothing if vertex is not in graph
 -- [BH] Lk(v, G)
-link :: SpineGraph -> Vertex -> [Vertex]
-link = (!)
+link :: SpineGraph -> Vertex -> Maybe [Vertex]
+link sg v = do vzs <- M.lookup v sg
+               return $ map fst vzs
 
 -- Derivative of map
 -- [BH] Dg(v) : d \in Lk(v,G) |-> Dg(d) \in Lk(g(v),G)
-derivative :: GraphMap -> Vertex -> Vertex -> Vertex
-derivative (_,_,emap) v d = snd $ head $ emap ! (v, d)
+derivative :: GraphMap -> SpineEdge -> SpineEdge
+derivative (_,_,emap) e = head $ emap M.! e
 
--- Removes the given edges from a graph. Preserves cyclic order
--- of the remaining edges. Note that we remove edges going both ways
--- even if our list of edges is one-directional.
-deleteEdges :: SpineGraph -> [Edge] -> SpineGraph
-deleteEdges sg =  (\(v1,v2) -> 
 
 -- Implementations of the fibered surface moves.
 -- 1. Collapse invariant forest
@@ -44,9 +69,9 @@ deleteEdges sg =  (\(v1,v2) ->
 -- non-overlapping, then collapse them.
 
 collapse :: GraphMap -> GraphMap
-collapse (sg, vmap, emap) = foldl collapseTree g nubInvForest
-    where invVertices  = filter (\v -> v == vmap ! v) $ vertices sg
-          invEdges     = filter (\e -> [e] == emap ! e) $ edges sg
+collapse g@(sg, vmap, emap) = foldl collapseTree g nubInvForest
+    where invVertices  = filter (\v -> v == vmap M.! v) $ sgVertices sg
+          invEdges     = filter (\e -> [e] == emap M.! e) $ sgEdges sg
           invForest   :: [Tree Vertex]
           invForest    = dfs invVertices $ buildG (vertices sg) invEdges
           -- Remove overlaps to get nubInvForest
@@ -60,8 +85,7 @@ collapse (sg, vmap, emap) = foldl collapseTree g nubInvForest
           -- single vertex. This is tricky bc we need to keep get the cyclic
           -- order correct at the new (collapsed) vertex.
           collapseTree :: GraphMap -> Tree Vertex -> GraphMap
-          collapseTree g (Tree v []) = g -- trivial (one-vertex) case
-          
+          collapseTree g (Node v []) = g -- trivial (one-vertex) case
 
 -- Sums primes up to nth (yay lazy evaluation!)
 sumPrimesTo :: Integer -> Integer
