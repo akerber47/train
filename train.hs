@@ -1,31 +1,69 @@
+{-
 import Data.Array
 import Data.Graph
 import Data.Tree
 import Data.List
-import Data.Maybe
+-}
 import qualified Data.Map.Lazy as M
+import qualified Data.Maybe as Maybe
+import qualified Control.Monad as Monad
 
--- Represents a graph which is the spine of a (fibered) surface. Note that the
--- adjacency lists are stored in cyclic order (as in Toby Hall's Trains program)
--- for the Bestvina-Handel algorithm. We also keep track of the "zones" (regions
--- in the surface) that each edge travels through, in order. We'll store the
--- surface and its zones with a (fixed) representation later. Note that we don't
--- need to store the zone data of the vertices as this is easy to recover from
--- the zone data on the edges.
--- By convention, since our graphs are undirected, we store all edges pointing
--- in both directions, so builtin functions like dfs, etc. work correctly. This
--- means that any fixed-edge filtering operation, spine graph constructor, etc.
--- will consume/produce this duplicate data.
--- Finally, note that there may be multiple edges between any pair of vertices
--- (that is, our graph may not be simple). We represent this by storing the same
--- vertex multiple times in the adjacency list.
+-- A SpineGraph represents a graph which is embedded as the spine of a surface,
+-- keeping track of the data necessary to:
+-- (1) Implement the Bestvina-Handel algorithm
+-- (2) Display the resulting fibered surface / train track
+-- As in Toby Hall's program "Trains", we need to store data on each vertex (the
+-- zone of the surface it's located in, and the cyclic order of its incident
+-- edges) and each edge (its endpoints, and the zones of the surface it
+-- traverses). The surface is divided into "zones" around punctures / boundaries
+-- / etc.
+-- We represent the graph as an adjacency list AND an incidence list. Any
+-- updates to the graph need to keep all these components in sync.
 -- [BH] G
-type Zone = Int
-type SpineGraph = M.Map Vertex [(Vertex, [Zone])]
+newtype VertexID = VertexID { vertexID :: Int }
+    deriving (Show,Eq,Ord)
+newtype EdgeID   = EdgeID   { edgeID   :: Int }
+    deriving (Show,Eq,Ord)
+newtype ZoneID   = ZoneID   { zoneID   :: Int }
+    deriving (Show,Eq,Ord)
 
--- Edge in a SpineGraph, with zone data.
-type SpineEdge = (Vertex, Vertex, [Zone])
+data SpineVertex = SpineVertex
+    { incidentEdges :: [EdgeID] -- in cyclic order
+    , vertexZone    :: ZoneID }
+-- Note that edges are undirected. Each edge ID will be listed among the
+-- incident edges of both its start and end vertices.
+data SpineEdge = SpineEdge
+    { firstVertex    :: VertexID
+    , secondVertex   :: VertexID
+    , traversedZones :: [ZoneID] }
 
+data SpineGraph = SpineGraph
+    { vertexData :: M.Map VertexID SpineVertex
+    , edgeData   :: M.Map EdgeID SpineEdge }
+
+-- Check if the data stored in the graph structure is consistent.
+isConsistent :: SpineGraph -> Bool
+isConsistent (SpineGraph vdata edata) = Maybe.isJust $ do
+     Monad.forM_ (M.keys edata) checkEndpoints
+     Monad.forM_ (M.keys vdata) checkIncEdges
+     where checkEndpoints :: EdgeID -> Maybe ()
+           checkEndpoints eid = do
+               SpineEdge v1id v2id zs <- M.lookup eid edata
+               -- Check that both endpoints of each edge exist...
+               SpineVertex _ z1 <- M.lookup v1id vdata
+               SpineVertex _ z2 <- M.lookup v2id vdata
+               -- ... and have the same zones as the start/end zones of the edge
+               ez1 <- Maybe.listToMaybe zs
+               if z1 == ez1 && z2 == last zs then Just () else Nothing
+           checkIncEdges :: VertexID -> Maybe ()
+           checkIncEdges vid = do
+               SpineVertex ies _ <- M.lookup vid vdata
+               Monad.forM_ ies (\eid -> do
+                   -- Check that all incident edges of each vertex exist...
+                   SpineEdge v1id v2id _ <- M.lookup eid edata
+                   -- and have that vertex as a start or end vertex
+                   if v1id == vid || v2id == vid then Just () else Nothing)
+{-
 -- Convert a SpineGraph into a Data.Graph.Graph by forgetting zone data, and
 -- converting the Map into an Array.
 toGraph :: SpineGraph -> Graph
@@ -96,7 +134,7 @@ collapse g@(sg, vmap, emap) = foldl collapseTree g nubInvForest
           -- order correct at the new (collapsed) vertex.
           collapseTree :: GraphMap -> Tree Vertex -> GraphMap
           collapseTree g (Node v []) = g -- trivial (one-vertex) case
-
+-}
 -- Sums primes up to nth (yay lazy evaluation!)
 sumPrimesTo :: Integer -> Integer
 sumPrimesTo n = sieve [2..] 0
