@@ -2,6 +2,7 @@ import Data.Array
 import Data.Graph
 import Data.Tree
 import Data.List
+import Data.Maybe
 import qualified Data.Map.Lazy as M
 
 -- Represents a graph which is the spine of a (fibered) surface. Note that the
@@ -43,6 +44,14 @@ sgVertices = M.keys
 sgEdges :: SpineGraph -> [SpineEdge]
 sgEdges sg = concat [[(v1,v2,zs) | (v2,zs) <- vzs] | (v1,vzs) <- M.toList sg]
 
+-- Returns the SpineEdge (with zone data) corresponding to the given pair of
+-- vertices which is leftmost in the cyclic order about the first vertex.
+-- Returns Nothing if no such edges in graph
+leftSpineEdge :: SpineGraph -> Vertex -> Vertex -> Maybe SpineEdge
+leftSpineEdge sg v1 v2 = do vzs    <- M.lookup v1 sg
+                            (v,zs) <- find ((== v2) . fst) vzs
+                            return (v1,v2,zs)
+
 -- Map sends vertices to vertices, and edges to edge paths.
 -- Maps implemented with Data.Map (dicts) for ease of updating (with insert).
 -- Note that arrays don't work so well bc SpineEdges lack good Ix behavior.
@@ -57,9 +66,10 @@ link sg v = do vzs <- M.lookup v sg
                return $ map fst vzs
 
 -- Derivative of map
+-- Returns Nothing if map degenerate at the given edge (ie maps it to no edges)
 -- [BH] Dg(v) : d \in Lk(v,G) |-> Dg(d) \in Lk(g(v),G)
-derivative :: GraphMap -> SpineEdge -> SpineEdge
-derivative (_,_,emap) e = head $ emap M.! e
+derivative :: GraphMap -> SpineEdge -> Maybe SpineEdge
+derivative (_,_,emap) e = listToMaybe $ emap M.! e
 
 
 -- Implementations of the fibered surface moves.
