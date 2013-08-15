@@ -1,12 +1,12 @@
 {-
 import Data.Array
-import Data.Graph
 import Data.Tree
 import Data.List
 -}
 import qualified Data.Map.Lazy as M
 import qualified Data.Maybe as Maybe
 import qualified Control.Monad as Monad
+import qualified Data.Graph as Graph
 
 -- A SpineGraph represents a graph which is embedded as the spine of a surface,
 -- keeping track of the data necessary to:
@@ -20,6 +20,9 @@ import qualified Control.Monad as Monad
 -- We represent the graph as an adjacency list AND an incidence list. Any
 -- updates to the graph need to keep all these components in sync.
 -- [BH] G
+
+-- Note that all ID types must be instances of Ord so they can be used as keys
+-- in a Data.Map.Lazy.Map
 newtype VertexID = VertexID { vertexID :: Int }
     deriving (Show,Eq,Ord)
 newtype EdgeID   = EdgeID   { edgeID   :: Int }
@@ -28,7 +31,7 @@ newtype ZoneID   = ZoneID   { zoneID   :: Int }
     deriving (Show,Eq,Ord)
 
 data SpineVertex = SpineVertex
-    { incidentEdges :: [EdgeID] -- in cyclic order
+    { incidentEdges :: [EdgeID] -- in cyclic order in the embedded graph
     , vertexZone    :: ZoneID }
 -- Note that edges are undirected. Each edge ID will be listed among the
 -- incident edges of both its start and end vertices.
@@ -61,54 +64,40 @@ isConsistent (SpineGraph vdata edata) = Maybe.isJust $ do
                Monad.forM_ ies (\eid -> do
                    -- Check that all incident edges of each vertex exist...
                    SpineEdge v1id v2id _ <- M.lookup eid edata
-                   -- and have that vertex as a start or end vertex
+                   -- .. and have that vertex as a start or end vertex
                    if v1id == vid || v2id == vid then Just () else Nothing)
-{-
--- Convert a SpineGraph into a Data.Graph.Graph by forgetting zone data, and
--- converting the Map into an Array.
-toGraph :: SpineGraph -> Graph
-toGraph sg = fmap (map fst) $
-    array (fst $ M.findMin sg, fst $ M.findMax sg) (M.toList sg)
 
--- Convert a SpineEdge into a Data.Graph.Edge by forgetting zone data
-toEdge :: SpineEdge -> Edge
-toEdge (v1,v2,zs) = (v1,v2)
+-- Accessor functions (for information hiding about structural details)
+vertices :: SpineGraph -> [VertexID]
+vertices = M.keys . vertexData
 
-sgVertices :: SpineGraph -> [Vertex]
-sgVertices = M.keys
+edges :: SpineGraph -> [EdgeID]
+edges = M.keys . edgeData
 
--- Incidence list (with zone data) of SpineGraph. Note that this loses cyclic
--- order of edges incident at each vertex.
-sgEdges :: SpineGraph -> [SpineEdge]
-sgEdges sg = concat [[(v1,v2,zs) | (v2,zs) <- vzs] | (v1,vzs) <- M.toList sg]
+-- Convert a SpineGraph into a Data.Graph.Graph by forgetting lots of stuff. We
+-- produce a directed graph with all edges duplicated (so dfs, etc. will work
+-- correctly).
+toAbstractGraph :: SpineGraph -> Graph.Graph
+toAbstractGraph (SpineGraph vdata edata) = Graph.buildG (minvid, maxvid) edges
+    where -- Add edges in both directions.
+          edges = (map (\(SpineEdge (VertexID v1) (VertexID v2) _) -> (v1,v2)) $
+              M.elems edata) ++
+                  (map (\(SpineEdge (VertexID v1) (VertexID v2) _) -> (v2,v1)) $
+              M.elems edata)
+          vids = map vertexID $ M.keys vdata
+          minvid = minimum vids
+          maxvid = maximum vids
 
--- Returns the SpineEdge (with zone data) corresponding to the given pair of
--- vertices which is leftmost in the cyclic order about the first vertex.
--- Returns Nothing if no such edges in graph
-leftSpineEdge :: SpineGraph -> Vertex -> Vertex -> Maybe SpineEdge
-leftSpineEdge sg v1 v2 = do vzs    <- M.lookup v1 sg
-                            (v,zs) <- find ((== v2) . fst) vzs
-                            return (v1,v2,zs)
+-- Represents a path of edges. For each edge we indicate whether we traverse it
+-- forwards or backwards.
+data Dir = Fwd | Back
+data Path = Path [(EdgeID,Dir)]
 
 -- Map sends vertices to vertices, and edges to edge paths.
--- Maps implemented with Data.Map (dicts) for ease of updating (with insert).
--- Note that arrays don't work so well bc SpineEdges lack good Ix behavior.
 -- [BH] g: G -> G
-type GraphMap = (SpineGraph, M.Map Vertex Vertex, M.Map SpineEdge [SpineEdge])
+type GraphMap = (SpineGraph, M.Map VertexID VertexID, M.Map EdgeID Path)
 
--- Link of vertex is precisely the adjacency list
--- Returns Nothing if vertex is not in graph
--- [BH] Lk(v, G)
-link :: SpineGraph -> Vertex -> Maybe [Vertex]
-link sg v = do vzs <- M.lookup v sg
-               return $ map fst vzs
-
--- Derivative of map
--- Returns Nothing if map degenerate at the given edge (ie maps it to no edges)
--- [BH] Dg(v) : d \in Lk(v,G) |-> Dg(d) \in Lk(g(v),G)
-derivative :: GraphMap -> SpineEdge -> Maybe SpineEdge
-derivative (_,_,emap) e = listToMaybe $ emap M.! e
-
+{-
 
 -- Implementations of the fibered surface moves.
 -- 1. Collapse invariant forest
