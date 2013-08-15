@@ -39,9 +39,6 @@ rev :: Dir -> Dir
 rev Fwd = Back
 rev Back = Fwd
 
--- Directed edge = edge + direction to traverse in
-data DEdge = DEdge EdgeID Dir
-    deriving (Show,Eq)
 
 data SpineVertex = SpineVertex
     { incidentEdges :: [EdgeID] -- in cyclic order in the embedded graph
@@ -51,6 +48,8 @@ data SpineVertex = SpineVertex
     deriving (Show)
 -- Note that we don't store the incident edges as directed edges bc, well, they
 -- aren't really, and it gets confusing to access.
+-- If an edge has both endpoints at a single vertex, the edge is listed twice in
+-- the incident edge list (once Fwd and once Back)
 
 -- Note that edges are undirected. Each edge ID will be listed among the
 -- incident edges of both its start and end vertices. BUT when it comes to
@@ -66,6 +65,18 @@ data SpineGraph = SpineGraph
     { vertexData :: M.Map VertexID SpineVertex
     , edgeData   :: M.Map EdgeID SpineEdge }
     deriving (Show)
+
+-- Directed edge = edge + direction to traverse in
+data DEdge = DEdge EdgeID Dir
+    deriving (Show,Eq)
+
+-- Get the directed endpoints (start,end) of a given edge.
+dirEndpoints :: SpineGraph -> DEdge -> Maybe (VertexID,VertexID)
+dirEndpoints (SpineGraph _ edata) (DEdge e d) = do
+    SpineEdge v1 v2 _ <- M.lookup e edata
+    return (case d of Fwd  -> (v1,v2)
+                      Back -> (v2,v1))
+
 
 -- Check if the data stored in the graph structure is consistent.
 isConsistent :: SpineGraph -> Bool
@@ -152,14 +163,12 @@ edgePreimage (GraphMap _ _ emap) e = M.keys $
 -- step (v1,v2) onto the image of the edge (w,v)
 --
 -- Error if the ids are invalid or the above condition is false.
-isoVertexLeft :: VertexID -> DEdge -> GraphMap -> GraphMap
-isoVertexLeft v (DEdge e dir) (GraphMap sg@(SpineGraph vdata edata) vmap emap)
+isoVertex :: DEdge -> VertexID -> GraphMap -> GraphMap
+isoVertex de@(DEdge e dir) v (GraphMap sg@(SpineGraph vdata edata) vmap emap)
     = GraphMap sg newvmap newemap
     where (SpineVertex ies dirs _)  = Maybe.fromJust $ M.lookup v vdata
-          (SpineEdge estart eend _) = Maybe.fromJust $ M.lookup e edata
           -- Find the 1st and 2nd vertices in the correct direction
-          (v1,v2)                   = case dir of Fwd  -> (estart,eend)
-                                                  Back -> (eend,estart)
+          (v1,v2)                   = Maybe.fromJust $ dirEndpoints sg de
           -- Vertex (which mapped to v1) now maps to v2
           newvmap = assert (v1 == (Maybe.fromJust $ M.lookup v vmap)) $
               M.insert v v2 vmap
@@ -172,6 +181,14 @@ isoVertexLeft v (DEdge e dir) (GraphMap sg@(SpineGraph vdata edata) vmap emap)
                                    Fwd  -> M.adjust ([DEdge e (rev dir)] ++) ie
                                    Back -> M.adjust (++ [DEdge e dir]) ie
 
+-- Isotope the given map by postcomposing with an isotopy "pulling the given
+-- edge's start vertex across itself". That is, apply the earlier isotopy to all
+-- preimages of the given edge's starting vertex.
+-- Similarly, error if edge not present.
+isoVertexRight :: DEdge -> GraphMap -> GraphMap
+isoVertexRight de g@(GraphMap sg _ _) =
+    foldr (isoVertex de) g (vertexPreimage g v)
+    where (v,_) = Maybe.fromJust $ dirEndpoints sg de
 
 -- Implementations of the fibered surface moves.
 -- 1. Collapse invariant forest
