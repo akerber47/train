@@ -34,7 +34,6 @@ newtype ZoneID   = ZoneID   { zoneID   :: Int }
 data Dir = Fwd | Back -- Direction of traversal/orientation of an edge
     deriving (Show,Eq)
 
--- Reverse a direction
 rev :: Dir -> Dir
 rev Fwd = Back
 rev Back = Fwd
@@ -46,8 +45,6 @@ data SpineVertex = SpineVertex
                              -- Back if 2nd vertex
     , vertexZone    :: ZoneID }
     deriving (Show)
--- Note that we don't store the incident edges as directed edges bc, well, they
--- aren't really, and it gets confusing to access.
 -- If an edge has both endpoints at a single vertex, the edge is listed twice in
 -- the incident edge list (once Fwd and once Back)
 
@@ -78,7 +75,12 @@ dirEndpoints (SpineGraph _ edata) (DEdge e d) = do
                       Back -> (v2,v1))
 
 
--- Check if the data stored in the graph structure is consistent.
+vertices :: SpineGraph -> [VertexID]
+vertices = M.keys . vertexData
+
+edges :: SpineGraph -> [EdgeID]
+edges = M.keys . edgeData
+
 isConsistent :: SpineGraph -> Bool
 isConsistent (SpineGraph vdata edata) = Maybe.isJust $ do
      Monad.forM_ (M.keys edata) checkEndpoints
@@ -104,20 +106,12 @@ isConsistent (SpineGraph vdata edata) = Maybe.isJust $ do
                                ies
                                dirs
 
--- Accessor functions (for information hiding about structural details)
-vertices :: SpineGraph -> [VertexID]
-vertices = M.keys . vertexData
-
-edges :: SpineGraph -> [EdgeID]
-edges = M.keys . edgeData
-
 -- Convert a SpineGraph into a Data.Graph.Graph by forgetting lots of stuff. We
--- produce a directed graph with all edges duplicated (so dfs, etc. will work
--- correctly).
+-- produce a directed graph with 2 edges for each undirected edge in the
+-- original graph (so dfs, etc. will work correctly).
 toAbstractGraph :: SpineGraph -> Graph.Graph
 toAbstractGraph (SpineGraph vdata edata) = Graph.buildG (minvid, maxvid) es
-    where -- Add edges in both directions.
-          es   = (map (\(SpineEdge (VertexID v1) (VertexID v2) _) -> (v1,v2)) $
+    where es   = (map (\(SpineEdge (VertexID v1) (VertexID v2) _) -> (v1,v2)) $
               M.elems edata) ++
                   (map (\(SpineEdge (VertexID v1) (VertexID v2) _) -> (v2,v1)) $
               M.elems edata)
@@ -140,16 +134,9 @@ data GraphMap = GraphMap
 vertexPreimage :: GraphMap -> VertexID -> [VertexID]
 vertexPreimage (GraphMap _ vmap _) v = M.keys $ M.filter (== v) vmap
 
-
--- Check if the data stored in the graph map structure is consistent.
 isConsistentMap :: GraphMap -> Bool
 isConsistentMap g = Maybe.isJust $ Just () -- TODO XXX
 
-{-
-edgePreimage :: GraphMap -> EdgeID -> [EdgeID]
-edgePreimage (GraphMap _ _ emap) e = M.keys $
-    M.filter (\des -> e `elem` des) emap
--}
 -- Map manipulation helper functions.
 
 -- Isotope the given map by pulling the image of the given vertex across the
@@ -167,7 +154,6 @@ isoVertex :: DEdge -> VertexID -> GraphMap -> GraphMap
 isoVertex de@(DEdge e dir) v (GraphMap sg@(SpineGraph vdata edata) vmap emap)
     = GraphMap sg newvmap newemap
     where (SpineVertex ies dirs _)  = Maybe.fromJust $ M.lookup v vdata
-          -- Find the 1st and 2nd vertices in the correct direction
           (v1,v2)                   = Maybe.fromJust $ dirEndpoints sg de
           -- Vertex (which mapped to v1) now maps to v2
           newvmap = assert (v1 == (Maybe.fromJust $ M.lookup v vmap)) $
@@ -189,6 +175,7 @@ isoVertexRight :: DEdge -> GraphMap -> GraphMap
 isoVertexRight de g@(GraphMap sg _ _) =
     foldr (isoVertex de) g (vertexPreimage g v)
     where (v,_) = Maybe.fromJust $ dirEndpoints sg de
+
 
 -- Implementations of the fibered surface moves.
 -- 1. Collapse invariant forest
