@@ -176,6 +176,25 @@ isoVertexRight de g@(GraphMap sg _ _) =
     foldr (isoVertex de) g (vertexPreimage g v)
     where (v,_) = Maybe.fromJust $ dirEndpoints sg de
 
+-- Yields the result of applying f until a fixed point is reached.
+untilFixed :: (Eq a) => (a -> a) -> a -> a
+untilFixed f x = fst . head . filter (uncurry (==)) $
+        zip (iterate f x) (tail $ iterate f x)
+
+-- Return a path which does not backtrack, by removing all parts of the path
+-- which double back on themselves.
+-- This algorithm is grotesquely inefficient.
+deBacktrack :: Path -> Path
+deBacktrack = untilFixed deBacktrackPair
+    where -- Remove the last matching backtracking pair of path components,
+          -- e.g. given path (e1 Fwd),(e1 Back),(e2 Back),(e2 Fwd),(e2 Back),
+          -- the last two path components will be removed.
+          deBacktrackPair :: Path -> Path
+          deBacktrackPair [] = []
+          deBacktrackPair [de] = [de]
+          deBacktrackPair (de1@(DEdge e1 d1):de2@(DEdge e2 d2):des)
+            | e1 == e2 && d1 == rev d2 = des
+            | otherwise                = de1:de2:(deBacktrackPair des)
 
 -- Implementations of the fibered surface moves.
 -- 1. Collapse invariant forest
