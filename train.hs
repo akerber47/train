@@ -101,17 +101,17 @@ isConsistent (SpineGraph vdata edata) = Maybe.isJust $ do
                SpineVertex _ _ z2 <- M.lookup v2id vdata
                -- ... and have the same zones as start/end zones of the edge
                ez1 <- Maybe.listToMaybe zs
-               guard $ z1 == ez1 && z2 == last zs
+               Monad.guard $ z1 == ez1 && z2 == last zs
            checkIncEdges :: VertexID -> Maybe ()
            checkIncEdges vid = do
                SpineVertex ies dirs _ <- M.lookup vid vdata
                Monad.zipWithM_ checkIncEdge ies dirs
                where checkIncEdge eid dir = do
-                   -- Check that all incident edges of each vertex exist...
-                   SpineEdge v1id v2id _ <- M.lookup eid edata
-                   -- ... and have that vertex as a start or end vertex
-                   guard $ (v1id == vid && dir == Fwd) ||
-                           (v2id == vid && dir == Back)
+                         -- Check that each incident edge exists...
+                         SpineEdge v1id v2id _ <- M.lookup eid edata
+                         -- ... and have that vertex as a start or end vertex
+                         Monad.guard $ (v1id == vid && dir == Fwd) ||
+                                       (v2id == vid && dir == Back)
 
 -- Convert a SpineGraph into a Data.Graph.Graph by forgetting lots of stuff. We
 -- produce a directed graph with 2 edges for each undirected edge in the
@@ -132,22 +132,22 @@ toAbstractGraph (SpineGraph vdata edata) = Graph.buildG (minvid, maxvid) es
 -- up its endpoints to figure out what vertex it's actually "sitting on"
 type Path = [DEdge]
 
-pathStart :: Path -> Maybe VertexID
-pathStart [] = Nothing
-pathStart p  = Monad.liftM fst $ dirEndpoints (head p)
+pathStart :: SpineGraph -> Path -> Maybe VertexID
+pathStart _ [] = Nothing
+pathStart sg p = Monad.liftM fst $ dirEndpoints sg (head p)
 
-pathEnd :: Path -> Maybe VertexID
-pathEnd [] = Nothing
-pathEnd p  = Monad.liftM snd $ dirEndpoints (last p)
+pathEnd :: SpineGraph -> Path -> Maybe VertexID
+pathEnd _ [] = Nothing
+pathEnd sg p = Monad.liftM snd $ dirEndpoints sg (last p)
 
-isConsistentPath :: Path -> Bool
-isConsistentPath [] = True
-isConsistentPath p  = Maybe.isJust $ zipWithM_ checkPair p (tail p)
+isConsistentPath :: SpineGraph -> Path -> Bool
+isConsistentPath _ [] = True
+isConsistentPath sg p = Maybe.isJust $ Monad.zipWithM_ checkPair p (tail p)
     where checkPair de1 de2 = do
               -- end of each edge is start of the next
-              (v11,v12) <- dirEndpoints de1
-              (v21,v22) <- dirEndpoints de2
-              guard $ v12 == v21
+              (v11,v12) <- dirEndpoints sg de1
+              (v21,v22) <- dirEndpoints sg de2
+              Monad.guard $ v12 == v21
 
 -- Map sends vertices to vertices, and edges to edge paths.
 -- [BH] g: G -> G
@@ -177,12 +177,12 @@ isConsistentMap (GraphMap sg@(SpineGraph vdata edata) vmap emap) =
             gv2 <- M.lookup v2 vmap
             path <- M.lookup e emap
             case path of
-                 []        -> guard $ gv1 == gv2
-                 otherwise -> do
-                     p1 <- pathStart path
-                     p2 <- pathEnd path
-                     guard $ gv1 == p1 && gv2 == p2
-            guard $ isConsistentPath path
+                 [] -> Monad.guard $ gv1 == gv2
+                 p  -> do
+                     p1 <- pathStart sg path
+                     p2 <- pathEnd sg path
+                     Monad.guard $ gv1 == p1 && gv2 == p2
+            Monad.guard $ isConsistentPath sg path
 
 
 
@@ -245,7 +245,7 @@ deBacktrack = untilFixed deBacktrackPair
 -- Return all edges which are fixed under the given map.
 invariantEdges :: GraphMap -> [EdgeID]
 invariantEdges (GraphMap _ _ emap) = filter isInv $ M.keys emap
-    where isInv e = [(e,Fwd) == Maybe.fromJust (M.lookup e emap)]
+    where isInv e = [(DEdge e Fwd)] == Maybe.fromJust (M.lookup e emap)
 
 
 
