@@ -3,6 +3,7 @@ import Data.Array
 import Data.Tree
 import Data.List
 -}
+import qualified Data.List as List
 import qualified Data.Map.Lazy as M
 import qualified Data.Maybe as Maybe
 import qualified Control.Monad as Monad
@@ -58,8 +59,8 @@ data SpineVertex = SpineVertex
 
 -- Note that edges are undirected. Each edge ID will be listed among the
 -- incident edges of both its start and end vertices. BUT when it comes to
--- things that require an edge orientation (like map of edges in GraphMap) we
--- use the first -> second orientation by convention in the map.
+-- things that depend on edge orientation (like map of edges in GraphMap) we
+-- use the first -> second orientation by convention.
 data SpineEdge = SpineEdge
     { firstVertex    :: VertexID
     , secondVertex   :: VertexID
@@ -81,7 +82,12 @@ dirEndpoints (SpineGraph _ edata) (DEdge e d) = do
     SpineEdge v1 v2 _ <- M.lookup e edata
     return (case d of Fwd  -> (v1,v2)
                       Back -> (v2,v1))
-
+-- Get the directed zones of a given edge.
+dirZones :: SpineGraph -> DEdge -> Maybe [ZoneID]
+dirZones (SpineGraph _ edata) (DEdge e d) = do
+    SpineEdge _ _ zs <- M.lookup e edata
+    return (case d of Fwd  -> zs
+                      Back -> reverse zs)
 
 vertices :: SpineGraph -> [VertexID]
 vertices = M.keys . vertexData
@@ -140,6 +146,9 @@ pathEnd :: SpineGraph -> Path -> Maybe VertexID
 pathEnd _ [] = Nothing
 pathEnd sg p = Monad.liftM snd $ dirEndpoints sg (last p)
 
+revPath :: Path -> Path
+revPath p = reverse [(DEdge e (rev d)) | (DEdge e d) <- p]
+
 isConsistentPath :: SpineGraph -> Path -> Bool
 isConsistentPath _ [] = True
 isConsistentPath sg p = Maybe.isJust $ Monad.zipWithM_ checkPair p (tail p)
@@ -177,15 +186,23 @@ isConsistentMap (GraphMap sg@(SpineGraph vdata edata) vmap emap) =
             gv2 <- M.lookup v2 vmap
             path <- M.lookup e emap
             case path of
+                 -- Empty path stays at a single vertex
                  [] -> Monad.guard $ gv1 == gv2
                  p  -> do
+                     -- Nonempty path has correct endpoints
                      p1 <- pathStart sg path
                      p2 <- pathEnd sg path
                      Monad.guard $ gv1 == p1 && gv2 == p2
+            -- Interior edges of path line up consistently
             Monad.guard $ isConsistentPath sg path
 
-
-
+-- Derivative of map at given oriented edge, as in Bestvina-Handel.
+-- Nothing if edge collapses.
+derivative :: GraphMap -> DEdge -> Maybe DEdge
+derivative (GraphMap _ _ emap) (DEdge e d) =
+    case d of Fwd  -> Maybe.listToMaybe $ p
+              Back -> Maybe.listToMaybe $ revPath p
+    where p = Maybe.fromJust $ M.lookup e emap
 
 -- Map manipulation helper functions.
 
@@ -244,41 +261,72 @@ deBacktrack = untilFixed deBacktrackPair
 
 -- Return all edges which are fixed under the given map.
 invariantEdges :: GraphMap -> [EdgeID]
-invariantEdges (GraphMap _ _ emap) = filter isInv $ M.keys emap
-    where isInv e = [(DEdge e Fwd)] == Maybe.fromJust (M.lookup e emap)
+invariantEdges g@(GraphMap _ _ emap) = filter (isInvariant g) $ M.keys emap
+
+isInvariant :: GraphMap -> EdgeID -> Bool
+isInvariant g@(GraphMap _ _ emap) e =
+    [(DEdge e Fwd)] == Maybe.fromJust (M.lookup e emap)
 
 
 
 -- Implementations of the fibered surface moves.
--- 1. Collapse invariant forest
--- Find fixed vertices/edges, build forests from these, flatten them into
--- bunches of vertices / edges to be collapsed, check to make sure they're
--- non-overlapping, then collapse them.
+
+-- 1. Collapse an edge which is invariant under the given map. If edge is not
+-- invariant, error. We collapse the edge (v1,v2) "fwd" (that is, v1 is removed
+-- from the graph, and all edges incident to v1 are pulled to be incident to
+-- v2, adjusting zones and cyclic orders accordingly)
+collapseEdge :: GraphMap -> DEdge -> GraphMap
+collapseEdge g@(GraphMap sg@(SpineGraph vdata edata) vmap emap)
+             de@(DEdge e d) =
+    assert (isInvariant g e && v1 /= v2) $
+        GraphMap (SpineGraph newvdata newedata) newvmap newemap
+    where (v1,v2) = Maybe.fromJust $ dirEndpoints sg de
+          SpineVertex v1ies v1ieds v1z = Maybe.fromJust $ M.lookup v1 vdata
+          SpineVertex v2ies v2ieds v2z = Maybe.fromJust $ M.lookup v2 vdata
+          -- Build new graph and map:
+          -- 1. Modify the data of all edges incident to v1 to
+          -- instead have v2 as a vertex, and modifying their zone lists
+          -- accordingly
+          newedata = foldl pullEdge edata $ zip v1ies v1ieds
+          pullEdge edata' (e',d') =
+              case d' of
+                   Back ->
+                       -- v1 was the 2nd vertex of edge e'
+                       M.insert e' (SpineEdge e1 v2 $ ezs++zs) edata'
+                   Fwd  ->
+                       -- v1 was the 1st vertex of edge e'
+                       M.insert e' (SpineEdge v2 e2 $ (reverse zs)++ezs) edata'
+              where SpineEdge e1 e2 ezs = Maybe.fromJust $ M.lookup e edata
+                    zs = Maybe.fromJust $ dirZones sg de
+          -- 2. Modify incidence list at v2 to include pulled edges, inserting
+          -- them at the location of the collapsed edge in the cyclic order.
+          -- Also, remove v1 from vertices
+          newvdata = M.insert v2 (SpineVertex newies newieds v2z) $
+              M.delete v1 vdata
+              where ix1 = Maybe.fromJust $ List.elemIndex e v1ies
+                    ix2 = Maybe.fromJust $ List.elemIndex e v2ies
+                    -- The incident edge at v1 "after" (v1,v2) in cyclic order
+                    -- is pulled to immediately "after"
+                    -- the incident edge at v2 "before" (v1,v2)
+                    -- (Draw a picture, it makes sense)
+                    newies = (take ix2 v2ies) ++
+                             (drop (ix1+1) v1ies) ++
+                             (take ix1 v1ies) ++
+                             (drop (ix2+1) v2ies)
+                    -- Dirs follow same pattern
+                    newieds = (take ix2 v2ieds) ++
+                              (drop (ix1+1) v1ieds) ++
+                              (take ix1 v1ieds) ++
+                              (drop (ix2+1) v2ieds)
+          -- 3. Remove v1 from vertex map
+          newvmap = M.delete v1 vmap
+          -- 4. Remove collapsed edge from all paths that edges map to
+          -- Also, remove collapsed edge from edge map
+          newemap = M.map (filter $ \(DEdge e' _) -> e' /= e) $ M.delete e emap
 
 -- 2. Valence 1 isotopy
 -- Find a valence 1 vertex
 
 
-{-
-
-collapse :: GraphMap -> GraphMap
-collapse g@(sg, vmap, emap) = foldl collapseTree g nubInvForest
-    where invVertices  = filter (\v -> v == vmap M.! v) $ sgVertices sg
-          invEdges     = filter (\e -> [e] == emap M.! e) $ sgEdges sg
-          invForest   :: [Tree Vertex]
-          invForest    = dfs invVertices $ buildG (vertices sg) invEdges
-          -- Remove overlaps to get nubInvForest
-          -- Note that "overlapping" is not actually an equivalence (it's not
-          -- transitive) so nubBy may accidentally remove too many elements from
-          -- this list. But that's ok bc collapse is not guaranteed to collapse
-          -- the largest possible invariant forest anyways.
-          nubInvForest = nubBy (\t1 t2 -> not $ null $
-                          intersect (flatten t1) (flatten t2)) invForest
-          -- Remove the given tree from the graph (map), replacing it with a
-          -- single vertex. This is tricky bc we need to keep get the cyclic
-          -- order correct at the new (collapsed) vertex.
-          collapseTree :: GraphMap -> Tree Vertex -> GraphMap
-          collapseTree g (Node v []) = g -- trivial (one-vertex) case
--}
 main :: IO ()
 main = print "TODO XXX"
