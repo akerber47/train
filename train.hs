@@ -145,8 +145,8 @@ collapseEdge :: DEdge -> SpineGraph -> SpineGraph
 collapseEdge de@(DEdge e d) sg@(SpineGraph vdata edata) =
         SpineGraph newvdata newedata
     where (v1,v2) = Maybe.fromJust $ dirEndpoints sg de
-          SpineVertex v1ies v1ieds v1z = Maybe.fromJust $ M.lookup v2 vdata
-          SpineVertex v2ies v2ieds v2z = Maybe.fromJust $ M.lookup v2 vdata
+          SpineVertex v1ies v1ieds v1z = vdata M.! v1
+          SpineVertex v2ies v2ieds v2z = vdata M.! v2
           -- Build new graph:
           -- 1. Modify the data of all edges incident to v1 to
           -- instead have v2 as a vertex, and modifying their zone lists
@@ -160,7 +160,7 @@ collapseEdge de@(DEdge e d) sg@(SpineGraph vdata edata) =
                    Fwd  ->
                        -- v1 was the 1st vertex of edge e'
                        M.insert e' (SpineEdge v2 e2 $ (reverse zs)++ezs) edata'
-              where SpineEdge e1 e2 ezs = Maybe.fromJust $ M.lookup e edata
+              where SpineEdge e1 e2 ezs = edata M.! e
                     zs = Maybe.fromJust $ dirZones sg de
           -- 2. Modify incidence list at v2 to include pulled edges, inserting
           -- them at the location of the collapsed edge in the cyclic order.
@@ -272,7 +272,7 @@ derivative :: GraphMap -> DEdge -> Maybe DEdge
 derivative (GraphMap _ _ emap) (DEdge e d) =
     case d of Fwd  -> Maybe.listToMaybe $ p
               Back -> Maybe.listToMaybe $ revPath p
-    where p = Maybe.fromJust $ M.lookup e emap
+    where p = emap M.! e
 
 -- Isotope the given map by pulling the image of the given vertex across the
 -- given edge and "dragging" the images of all edges incident to that vertex
@@ -288,10 +288,10 @@ derivative (GraphMap _ _ emap) (DEdge e d) =
 isoVertex :: DEdge -> VertexID -> GraphMap -> GraphMap
 isoVertex de@(DEdge e dir) v (GraphMap sg@(SpineGraph vdata edata) vmap emap)
     = GraphMap sg newvmap newemap
-    where (SpineVertex ies dirs _)  = Maybe.fromJust $ M.lookup v vdata
+    where (SpineVertex ies dirs _)  = vdata M.! v
           (v1,v2)                   = Maybe.fromJust $ dirEndpoints sg de
           -- Vertex (which mapped to v1) now maps to v2
-          newvmap = assert (v1 == (Maybe.fromJust $ M.lookup v vmap)) $
+          newvmap = assert (v1 == (vmap M.! v)) $
               M.insert v v2 vmap
           -- Each incident edge maps to a path with one additional step
           -- If the edge goes out of v, we add (v2,v1) to the front
@@ -333,7 +333,7 @@ invariantEdges g@(GraphMap _ _ emap) = filter (isInvariant g) $ M.keys emap
 
 isInvariant :: GraphMap -> EdgeID -> Bool
 isInvariant g@(GraphMap _ _ emap) e =
-    [(DEdge e Fwd)] == Maybe.fromJust (M.lookup e emap)
+    [(DEdge e Fwd)] == emap M.! e
 
 ------------------------------------------------------------------------------
 ------------------------------------------------------------------------------
