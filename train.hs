@@ -6,8 +6,6 @@ import qualified Data.Graph as Graph
 
 import Control.Exception.Base (assert)
 
-import Control.Monad.State.Strict as S
-
 -- Some really general things we use:
 
 -- Yields the result of applying f until a fixed point is reached.
@@ -92,8 +90,9 @@ dirZones (SpineGraph _ edata) (DEdge e d) = do
 -- Create a DEdge outgoing from the given vertex and traversing the given edge.
 -- If the given vertex is not an endpoint of the edge, error.
 toOutgoing :: SpineGraph -> EdgeID -> VertexID -> DEdge
-toOutgoing (SpineGraph _ edata) e v = assert v == v1 || v == v2 $ (DEdge e dir)
-    where (SpineEdge v1 v2 _) = e M.! edata
+toOutgoing (SpineGraph _ edata) e v = assert (v == v1 || v == v2) $
+    (DEdge e dir)
+    where (SpineEdge v1 v2 _) = edata M.! e
           dir = if v == v1 then Fwd else Back
 
 vertices :: SpineGraph -> [VertexID]
@@ -362,7 +361,7 @@ collapseInvEdge de@(DEdge e d) g@(GraphMap sg vmap emap) =
 -- up while "trying" to find a cycle.
 findInvCycleOrForest :: GraphMap -> Either Path [Tree]
 findInvCycleOrForest g@(GraphMap sg@(SpineGraph vdata edata) vmap emap) =
-    something
+    Left [] -- TODO
     where ies = invariantEdges g
           -- Perform depth-first search starting at the tail of the given
           -- DEdge, searching only invariant edges and stopping at any vertex
@@ -372,9 +371,9 @@ findInvCycleOrForest g@(GraphMap sg@(SpineGraph vdata edata) vmap emap) =
           -- path to an already-visited vertex (if we hit one) or the tree of
           -- edges we built up (if not).
           dfs :: DEdge -> [VertexID] -> ([VertexID], Either Path ETree)
-          dfs de@(DEdge e d) vs = blah
+          dfs de@(DEdge e d) vs = ([], Left []) -- TODO
             where (_,v) = Maybe.fromJust $ dirEndpoints sg de
-                  SpineVertex es _ _ = Maybe.fromJust $ M.lookup v vdata
+                  SpineVertex es _ _ = vdata M.! v
                   esToTraverse = List.delete e es
 
 
