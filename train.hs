@@ -3,7 +3,10 @@ import qualified Data.Map.Lazy as M
 import qualified Data.Maybe as Maybe
 import qualified Control.Monad as Monad
 import qualified Data.Graph as Graph
+
 import Control.Exception.Base (assert)
+
+import Control.Monad.State.Strict as S
 
 -- Some really general things we use:
 
@@ -86,6 +89,13 @@ dirZones (SpineGraph _ edata) (DEdge e d) = do
     return (case d of Fwd  -> zs
                       Back -> reverse zs)
 
+-- Create a DEdge outgoing from the given vertex and traversing the given edge.
+-- If the given vertex is not an endpoint of the edge, error.
+toOutgoing :: SpineGraph -> EdgeID -> VertexID -> DEdge
+toOutgoing (SpineGraph _ edata) e v = assert v == v1 || v == v2 $ (DEdge e dir)
+    where (SpineEdge v1 v2 _) = e M.! edata
+          dir = if v == v1 then Fwd else Back
+
 vertices :: SpineGraph -> [VertexID]
 vertices = M.keys . vertexData
 
@@ -136,7 +146,7 @@ collapseEdge :: DEdge -> SpineGraph -> SpineGraph
 collapseEdge de@(DEdge e d) sg@(SpineGraph vdata edata) =
         SpineGraph newvdata newedata
     where (v1,v2) = Maybe.fromJust $ dirEndpoints sg de
-          SpineVertex v1ies v1ieds v1z = Maybe.fromJust $ M.lookup v1 vdata
+          SpineVertex v1ies v1ieds v1z = Maybe.fromJust $ M.lookup v2 vdata
           SpineVertex v2ies v2ieds v2z = Maybe.fromJust $ M.lookup v2 vdata
           -- Build new graph:
           -- 1. Modify the data of all edges incident to v1 to
@@ -183,6 +193,15 @@ collapseEdge de@(DEdge e d) sg@(SpineGraph vdata edata) =
 -- Note that an edge can map to the empty path, in which case we need to look
 -- up its endpoints to figure out what vertex it's actually "sitting on"
 type Path = [DEdge]
+
+-- Represents a tree of vertices/edges in a SpineGraph. All edges point "down".
+-- This needs to be a list of trees bc there may be multiple edges out of
+-- root vertex - these will be the "root edges"
+type Tree = [Graph.Tree DEdge]
+
+-- Represents a tree of edges in a SpineGraph. All edges point "down". This has
+-- a "root edge" rather than a root vertex
+type ETree = Graph.Tree DEdge
 
 pathStart :: SpineGraph -> Path -> Maybe VertexID
 pathStart _ [] = Nothing
@@ -338,7 +357,34 @@ collapseInvEdge de@(DEdge e d) g@(GraphMap sg vmap emap) =
           -- Also, remove collapsed edge from edge map
           newemap = M.map (filter $ \(DEdge e' _) -> e' /= e) $ M.delete e emap
 
+-- Determines whether the invariant edges of the graph contain a cyclic path.
+-- If so, return such a path. If not, return the invariant forest we built
+-- up while "trying" to find a cycle.
+findInvCycleOrForest :: GraphMap -> Either Path [Tree]
+findInvCycleOrForest g@(GraphMap sg@(SpineGraph vdata edata) vmap emap) =
+    something
+    where ies = invariantEdges g
+          -- Perform depth-first search starting at the tail of the given
+          -- DEdge, searching only invariant edges and stopping at any vertex
+          -- on the given list of visited vertices. If we visit a vertex more
+          -- than once, found a cycle.
+          -- Return the new (longer) list of visited vertices, and either the
+          -- path to an already-visited vertex (if we hit one) or the tree of
+          -- edges we built up (if not).
+          dfs :: DEdge -> [VertexID] -> ([VertexID], Either Path ETree)
+          dfs de@(DEdge e d) vs = blah
+            where (_,v) = Maybe.fromJust $ dirEndpoints sg de
+                  SpineVertex es _ _ = Maybe.fromJust $ M.lookup v vdata
+                  esToTraverse = List.delete e es
+
+
+
 -- 2. Remove a valence 1 vertex via isotopy.
+
+
+-- 3. Remove a valence 2 vertex via isotopy.
+
+-- 4. Pull the map tight.
 
 
 main :: IO ()
