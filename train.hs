@@ -101,8 +101,8 @@ dirZones (SpineGraph _ edata) (DEdge e d) = do
 
 -- Create a DEdge outgoing from the given vertex and traversing the given edge.
 -- If the given vertex is not an endpoint of the edge, error.
-toOutgoing :: SpineGraph -> VertexID -> EdgeID -> DEdge
-toOutgoing (SpineGraph _ edata) v e = assert (v == v1 || v == v2) $
+toOut :: SpineGraph -> VertexID -> EdgeID -> DEdge
+toOut (SpineGraph _ edata) v e = assert (v == v1 || v == v2) $
     (DEdge e dir)
     where (SpineEdge v1 v2 _) = edata M.! e
           dir = if v == v1 then Fwd else Back
@@ -339,7 +339,11 @@ deBacktrack = untilFixed deBacktrackPair
             | e1 == e2 && d1 == rev d2 = des
             | otherwise                = de1:de2:(deBacktrackPair des)
 
--- Return all edges which are fixed under the given map.
+-- Return all vertices/edges which are fixed under the given map.
+invariantVertices :: GraphMap -> [VertexID]
+invariantVertices (GraphMap _ vmap _) = filter isInv $ M.keys vmap
+    where isInv v = v == vmap M.! v
+
 invariantEdges :: GraphMap -> [EdgeID]
 invariantEdges g@(GraphMap _ _ emap) = filter (isInvariant g) $ M.keys emap
 
@@ -373,8 +377,34 @@ collapseInvEdge de@(DEdge e d) g@(GraphMap sg vmap emap) =
 -- up while "trying" to find a cycle.
 findInvCycleOrForest :: GraphMap -> Either Path [Tree]
 findInvCycleOrForest g@(GraphMap sg@(SpineGraph vdata edata) vmap emap) =
-    Left [] -- TODO
-    where ies = invariantEdges g
+    fmap snd $
+        -- We use foldM throughout so that if we find a cycle (the Left case)
+        -- we will return it immediately without doing any more work.
+        Monad.foldM (\(visitedivs,tmpforest) nextv ->
+                      if elem nextv visitedivs
+                         -- If already visited this vertex, skip it
+                         then return (visitedivs,tmpforest)
+                         -- Otherwise dfs it, and add the resulting list/tree
+                         else do (vs, t) <- dfs nextv
+                                 return (visitedivs ++ vs, tmpforest ++ [t]))
+                    ([],[])
+                    ivs
+    where ivs = invariantVertices g
+          -- Perform depth-first search starting at the given vertex, searching
+          -- only invariant edges. Return either a cycle or a list of visited
+          -- vertices together with a tree of vertices/edges built up.
+          dfs :: VertexID -> Either Path ([VertexID], Tree)
+          dfs v0 = fmap (mapFst M.keys) $
+              -- As in dfsEdge, call recursively on all outgoing dedges and
+              -- pass the visitmap along, now appending the trees to a list.
+              Monad.foldM (\(tmpmap, tmplist) nextde ->
+                            fmap (mapSnd $ (tmplist++) . (:[]))
+                                 (dfsEdge nextde tmpmap))
+                          (M.singleton v0 [], [])
+                          outinvdes
+            where -- All outgoing invariant edges of current vertex
+                  SpineVertex es _ _ = vdata M.! v0
+                  outinvdes = map (toOut sg v0) . filter (isInvariant g) $ es
           -- Perform depth-first search starting at the head of the given
           -- DEdge, searching only invariant edges and stopping at any vertex
           -- that's a key of the given dict of visited vertices. If we visit
@@ -385,35 +415,33 @@ findInvCycleOrForest g@(GraphMap sg@(SpineGraph vdata edata) vmap emap) =
           -- Together with each visited vertex we store the path we took from
           -- our original starting vertex to that vertex. Each is "half" of the
           -- path/cycle we will return if we land on that vertex again.
-          dfs :: DEdge -> M.Map VertexID Path ->
+          dfsEdge :: DEdge -> M.Map VertexID Path ->
               Either Path (M.Map VertexID Path, ETree)
-          dfs de@(DEdge e d) visitmap =
+          dfsEdge de@(DEdge e d) visitmap =
               if M.member v visitmap
                  -- If already visited, return the cycle, by combining the
                  -- existing paths to v0 (w/ edge e added) and to v
                  then Left $ newpath ++ revPath (visitmap M.! v)
                  -- Otherwise, mark as visited in new visit map, and call
                  -- recursively on all other outgoing dedges. Note that we
-                 -- haven't traversed any of these edges yet as otherwise we
-                 -- would already have visited vertex v.
+                 -- haven't traversed any of these edges yet (except the given
+                 -- one) as otherwise we would already have visited vertex v.
                  -- For each outgoing edge call, we pass the visitmap along
                  -- through the fold, and insert the tree as a subtree of ours.
                  else Monad.foldM (\(tmpmap, tmptree) nextde ->
                                     fmap (mapSnd $ insertSubtree tmptree)
-                                         (dfs nextde tmpmap))
+                                         (dfsEdge nextde tmpmap))
                                   (newvisitmap, (Graph.Node de []))
                                   outinvdes
             where (v0,v) = Maybe.fromJust $ dirEndpoints sg de
-                  -- All outgoing edges of current vertex
+                  -- All outgoing invariant edges of current vertex
                   SpineVertex es _ _ = vdata M.! v
-                  outinvdes = map (toOutgoing sg v) . filter (isInvariant g) $
+                  outinvdes = map (toOut sg v) . filter (isInvariant g) $
                       List.delete e es
                   -- Visit path of current vertex is visit path of previous
                   -- vertex (tail of edge e) together w given edge
                   newpath = ((visitmap M.! v0) ++ [de])
                   newvisitmap = M.insert v newpath visitmap
-
-
 
 -- 2. Remove a valence 1 vertex via isotopy.
 
