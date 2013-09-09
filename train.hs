@@ -116,6 +116,10 @@ vertices = M.keys . vertexData
 edges :: SpineGraph -> [EdgeID]
 edges = M.keys . edgeData
 
+valence :: SpineGraph -> VertexID -> Int
+valence (SpineGraph vdata edata) v = List.length es
+    where SpineVertex es _ _ = vdata M.! v
+
 isConsistent :: SpineGraph -> Bool
 isConsistent (SpineGraph vdata edata) = Maybe.isJust $ do
      Monad.forM_ (M.keys edata) checkEndpoints
@@ -322,10 +326,27 @@ isoVertex de@(DEdge e dir) v (GraphMap sg@(SpineGraph vdata edata) vmap emap)
 -- all preimages of the given edge's starting vertex.
 --
 -- Similarly, error if edge not present.
-isoVertexRight :: DEdge -> GraphMap -> GraphMap
-isoVertexRight de g@(GraphMap sg _ _) =
+isoVertexOnRight :: DEdge -> GraphMap -> GraphMap
+isoVertexOnRight de g@(GraphMap sg _ _) =
     foldr (isoVertex de) g (vertexPreimage g v)
     where (v,_) = Maybe.fromJust $ dirEndpoints sg de
+
+-- Isotope the given map so that all preimages of the given edge's starting
+-- vertex are pulled across the given edge. Then collapse the given edge,
+-- removing it and its 1st vertex from both graph and map.
+isoAndCollapse :: DEdge -> GraphMap -> GraphMap
+isoAndCollapse de@(DEdge e _) g@(GraphMap sg _ _) =
+    GraphMap newsg newvmap newemap
+    where -- Postcompose g with isotopy so that no vertex lands on 1st vertex.
+          -- We can safely remove all copies of the given edge
+          -- from paths edges map to (as the new paths will be isotopic to old)
+          -- Also we remove this edge and vertex from the map.
+          (v1,v2) = Maybe.fromJust $ dirEndpoints sg de
+          GraphMap _ vmap emap = isoVertexOnRight de g
+          newvmap = M.delete v1 vmap
+          newemap = M.map (filter $ \(DEdge e' _) -> e' /= e) $ M.delete e emap
+          -- Finally, remove the offending edge from the graph itself
+          newsg = collapseEdge de sg
 
 -- Return a path which does not backtrack, by removing all parts of the path
 -- which double back on themselves.
@@ -389,11 +410,34 @@ collapseInvForest ts g = foldl (foldl collapseETree) g ts
               collapseInvEdge (revDEdge de) $ foldl collapseETree tmpg ets
 
 ---------- 2.2 ----------
--- Remove a valence 1 vertex via isotopy.
 
--- 3. Remove a valence 2 vertex via isotopy.
+-- Remove a valence 1 vertex via isotopy. If the vertex is not valence 1, error
+removeValenceOne :: VertexID -> GraphMap -> GraphMap
+removeValenceOne v g@(GraphMap sg@(SpineGraph vdata _) _ _) =
+    assert (valence sg v == 1) $
+        isoAndCollapse outde g
+    where SpineVertex es _ _ = vdata M.! v
+          -- Find single outgoing edge, then collapse it
+          outde@(DEdge e _) = toOut sg v $ head es
+
+---------- 2.3 ----------
+
+-- Remove a valence 2 vertex via isotopy. If the vertex is not valence 2, error
+removeValenceTwo :: VertexID -> GraphMap -> GraphMap
+removeValenceTwo v g@(GraphMap sg@(SpineGraph vdata _) _ _) =
+    assert (valence sg v == 2) $
+        isoAndCollapse outde1 g
+    where SpineVertex es _ _ = vdata M.! v
+          -- Find first outgoing edge, then collapse it
+          -- (this will automatically pull 2nd edge "across the bridge")
+          outde1@(DEdge e1 _) = toOut sg v $ head es
+
 
 -- 4. Pull the map tight.
+
+-- Find all vertices of a given valence
+verticesOfValence :: SpineGraph -> Int -> [VertexID]
+verticesOfValence sg n = filter (\v -> valence sg v == n) $ vertices sg
 
 -- Determines whether the invariant edges of the graph contain a cyclic path.
 -- If so, return such a path. If not, return the invariant forest we built
