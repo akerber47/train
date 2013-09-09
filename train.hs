@@ -25,6 +25,15 @@ mapSnd f (x,y) = (x, f y)
 insertSubtree :: Graph.Tree a -> Graph.Tree a -> Graph.Tree a
 insertSubtree (Graph.Node x ts) t = Graph.Node x (ts ++ [t])
 
+-- Find common prefix of list of lists
+commonPrefix :: (Eq a) => [[a]] -> [a]
+commonPrefix [] = []
+commonPrefix xss@((x:_):_) = if and $ map (\xs' ->
+                                            not (null xs') && x == head xs')
+                                          xss
+                                then x:(commonPrefix $ map tail xss)
+                                else []
+
 -- A SpineGraph represents a graph which is embedded as the spine of a surface,
 -- keeping track of the data necessary to:
 -- (1) Implement the Bestvina-Handel algorithm
@@ -285,13 +294,18 @@ isConsistentMap (GraphMap sg@(SpineGraph vdata edata) vmap emap) =
             -- Interior edges of path line up consistently
             Monad.guard $ isConsistentPath sg path
 
+-- Map directed edge to directed path
+mapDEdge :: GraphMap -> DEdge -> Path
+mapDEdge (GraphMap _ _ emap) (DEdge e d) =
+    case d of Fwd  -> p
+              Back -> revPath p
+    where p = emap M.! e
+
 -- Derivative of map at given oriented edge, as in Bestvina-Handel.
 -- Nothing if edge collapses.
 derivative :: GraphMap -> DEdge -> Maybe DEdge
-derivative (GraphMap _ _ emap) (DEdge e d) =
-    case d of Fwd  -> Maybe.listToMaybe $ p
-              Back -> Maybe.listToMaybe $ revPath p
-    where p = emap M.! e
+derivative = Maybe.listToMaybe . mapDEdge
+
 
 -- Isotope the given map by pulling the image of the given vertex across the
 -- given edge and "dragging" the images of all edges incident to that vertex
@@ -348,20 +362,6 @@ isoAndCollapse de@(DEdge e _) g@(GraphMap sg _ _) =
           -- Finally, remove the offending edge from the graph itself
           newsg = collapseEdge de sg
 
--- Return a path which does not backtrack, by removing all parts of the path
--- which double back on themselves.
--- This algorithm is grotesquely inefficient.
-deBacktrack :: Path -> Path
-deBacktrack = untilFixed deBacktrackPair
-    where -- Remove the last matching backtracking pair of path components,
-          -- e.g. given path (e1 Fwd),(e1 Back),(e2 Back),(e2 Fwd),(e2 Back),
-          -- the last two path components will be removed.
-          deBacktrackPair :: Path -> Path
-          deBacktrackPair [] = []
-          deBacktrackPair [de] = [de]
-          deBacktrackPair (de1@(DEdge e1 d1):de2@(DEdge e2 d2):des)
-            | e1 == e2 && d1 == rev d2 = des
-            | otherwise                = de1:de2:(deBacktrackPair des)
 
 -- Return all vertices/edges which are fixed under the given map.
 invariantVertices :: GraphMap -> [VertexID]
@@ -433,7 +433,29 @@ removeValenceTwo v g@(GraphMap sg@(SpineGraph vdata _) _ _) =
           outde1@(DEdge e1 _) = toOut sg v $ head es
 
 
--- 4. Pull the map tight.
+---------- 2.4 ----------
+-- Two functions to pull the map tight.
+
+-- Return a path which does not backtrack, by removing all parts of the path
+-- which double back on themselves.
+-- This algorithm is grotesquely inefficient.
+deBacktrack :: Path -> Path
+deBacktrack = untilFixed deBacktrackPair
+    where -- Remove the last matching backtracking pair of path components,
+          -- e.g. given path (e1 Fwd),(e1 Back),(e2 Back),(e2 Fwd),(e2 Back),
+          -- the last two path components will be removed.
+          deBacktrackPair :: Path -> Path
+          deBacktrackPair [] = []
+          deBacktrackPair [de] = [de]
+          deBacktrackPair (de1@(DEdge e1 d1):de2@(DEdge e2 d2):des)
+            | e1 == e2 && d1 == rev d2 = des
+            | otherwise                = de1:de2:(deBacktrackPair des)
+
+-- Modify the map by isotopy so that derivative will not be constant at given
+-- vertex (once paths are pulled tight / deBacktracked), by pulling its image
+-- forward along the edge which is image of derivative.
+deConstDerivative :: VertexID -> GraphMap -> GraphMap
+
 
 -- Find all vertices of a given valence
 verticesOfValence :: SpineGraph -> Int -> [VertexID]
