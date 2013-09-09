@@ -86,6 +86,9 @@ data SpineGraph = SpineGraph
 data DEdge = DEdge EdgeID Dir
     deriving (Show,Eq)
 
+revDEdge :: DEdge -> DEdge
+revDEdge (DEdge e d) = DEdge e (rev d)
+
 -- Get the directed endpoints (start,end) of a given edge.
 dirEndpoints :: SpineGraph -> DEdge -> Maybe (VertexID,VertexID)
 dirEndpoints (SpineGraph _ edata) (DEdge e d) = do
@@ -317,7 +320,7 @@ isoVertex de@(DEdge e dir) v (GraphMap sg@(SpineGraph vdata edata) vmap emap)
 -- Isotope the given map by postcomposing with an isotopy "pulling the given
 -- edge's start vertex across itself". That is, apply the earlier isotopy to
 -- all preimages of the given edge's starting vertex.
-
+--
 -- Similarly, error if edge not present.
 isoVertexRight :: DEdge -> GraphMap -> GraphMap
 isoVertexRight de g@(GraphMap sg _ _) =
@@ -357,7 +360,9 @@ isInvariant g@(GraphMap _ _ emap) e =
 
 -- Implementations of the fibered surface moves.
 
--- 1. Collapse an edge which is invariant under the given map. If edge is not
+---------- 2.1 ----------
+
+-- Collapse an edge which is invariant under the given map. If edge is not
 -- invariant, error.
 collapseInvEdge :: DEdge -> GraphMap -> GraphMap
 collapseInvEdge de@(DEdge e d) g@(GraphMap sg vmap emap) =
@@ -371,6 +376,24 @@ collapseInvEdge de@(DEdge e d) g@(GraphMap sg vmap emap) =
           -- 4. Remove collapsed edge from all paths that edges map to
           -- Also, remove collapsed edge from edge map
           newemap = M.map (filter $ \(DEdge e' _) -> e' /= e) $ M.delete e emap
+
+-- Collapse an entire forest of invariant vertices/edges. If forest is not
+-- invariant, error.
+collapseInvForest :: [Tree] -> GraphMap -> GraphMap
+-- Note that a list of Trees is a list of lists of ETrees
+collapseInvForest ts g = foldl (foldl collapseETree) g ts
+    where collapseETree :: GraphMap -> ETree -> GraphMap
+          -- Collapse outermost edges first, finishing with root edge.
+          -- Edges in an ETree point outward, so need to reverse them.
+          collapseETree tmpg (Graph.Node de ets) =
+              collapseInvEdge (revDEdge de) $ foldl collapseETree tmpg ets
+
+---------- 2.2 ----------
+-- Remove a valence 1 vertex via isotopy.
+
+-- 3. Remove a valence 2 vertex via isotopy.
+
+-- 4. Pull the map tight.
 
 -- Determines whether the invariant edges of the graph contain a cyclic path.
 -- If so, return such a path. If not, return the invariant forest we built
@@ -442,13 +465,6 @@ findInvCycleOrForest g@(GraphMap sg@(SpineGraph vdata edata) vmap emap) =
                   -- vertex (tail of edge e) together w given edge
                   newpath = ((visitmap M.! v0) ++ [de])
                   newvisitmap = M.insert v newpath visitmap
-
--- 2. Remove a valence 1 vertex via isotopy.
-
-
--- 3. Remove a valence 2 vertex via isotopy.
-
--- 4. Pull the map tight.
 
 
 main :: IO ()
