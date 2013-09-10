@@ -25,7 +25,8 @@ mapSnd f (x,y) = (x, f y)
 insertSubtree :: Graph.Tree a -> Graph.Tree a -> Graph.Tree a
 insertSubtree (Graph.Node x ts) t = Graph.Node x (ts ++ [t])
 
--- Find common prefix of list of lists
+-- Find common prefix of list of lists. This algorithm sucks but at least it
+-- was easy to write.
 commonPrefix :: (Eq a) => [[a]] -> [a]
 commonPrefix [] = []
 commonPrefix xss@((x:_):_) = if and $ map (\xs' ->
@@ -304,7 +305,7 @@ mapDEdge (GraphMap _ _ emap) (DEdge e d) =
 -- Derivative of map at given oriented edge, as in Bestvina-Handel.
 -- Nothing if edge collapses.
 derivative :: GraphMap -> DEdge -> Maybe DEdge
-derivative = Maybe.listToMaybe . mapDEdge
+derivative g = Maybe.listToMaybe . mapDEdge g
 
 
 -- Isotope the given map by pulling the image of the given vertex across the
@@ -455,6 +456,21 @@ deBacktrack = untilFixed deBacktrackPair
 -- vertex (once paths are pulled tight / deBacktracked), by pulling its image
 -- forward along the edge which is image of derivative.
 deConstDerivative :: VertexID -> GraphMap -> GraphMap
+deConstDerivative v g@(GraphMap sg@(SpineGraph vdata _) vmap emap)
+    | commonPath == [] = g
+    | otherwise        = GraphMap sg newvmap newemap
+    where SpineVertex es ds _ = vdata M.! v
+          outdes = zipWith DEdge es ds
+          commonPath = commonPrefix . map (mapDEdge g) $ outdes
+          -- Move the vertex's image forward along this common prefix path, and
+          -- remove that common prefix from all outgoing directed edge images.
+          newvmap = M.insert v (Maybe.fromJust $ pathEnd sg commonPath) vmap
+          newemap = foldr adjustEdge emap outdes
+          adjustEdge :: DEdge -> M.Map EdgeID Path -> M.Map EdgeID Path
+          adjustEdge (DEdge e d) =
+              case d of
+                   Fwd  -> M.adjust (List.\\commonPath) e
+                   Back -> M.adjust (reverse . (List.\\commonPath) . reverse) e
 
 
 -- Find all vertices of a given valence
