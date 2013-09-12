@@ -45,6 +45,8 @@ commonPrefix xss@((x:_):_) = if and $ map (\xs' ->
 -- incident edges) and each edge (its endpoints, and the zones of the surface
 -- it traverses). The surface is divided into "zones" around punctures /
 -- boundaries / etc.
+-- By convention, cyclic orders are "counterclockwise from outside" wrt
+-- implicit surface orientation.
 -- We represent the graph as an adjacency list AND an incidence list. Any
 -- updates to the graph need to keep all these components in sync.
 -- [BH] G
@@ -179,8 +181,8 @@ collapseEdge de@(DEdge e d) sg@(SpineGraph vdata edata) =
           -- Build new graph:
           -- 1. Modify the data of all edges incident to v1 to
           -- instead have v2 as a vertex, and modifying their zone lists
-          -- accordingly
-          newedata = foldl pullEdge edata $ zip v1ies v1ieds
+          -- accordingly. Also, remove the given edge.
+          newedata = foldl pullEdge (M.delete e edata) $ zip v1ies v1ieds
           pullEdge edata' (e',d') =
               case d' of
                    Back ->
@@ -189,7 +191,7 @@ collapseEdge de@(DEdge e d) sg@(SpineGraph vdata edata) =
                    Fwd  ->
                        -- v1 was the 1st vertex of edge e'
                        M.insert e' (SpineEdge v2 e2 $ (reverse zs)++ezs) edata'
-              where SpineEdge e1 e2 ezs = edata M.! e
+              where SpineEdge e1 e2 ezs = edata M.! e'
                     zs = Maybe.fromJust $ dirZones sg de
           -- 2. Modify incidence list at v2 to include pulled edges, inserting
           -- them at the location of the collapsed edge in the cyclic order.
@@ -211,6 +213,74 @@ collapseEdge de@(DEdge e d) sg@(SpineGraph vdata edata) =
                               (drop (ix1+1) v1ieds) ++
                               (take ix1 v1ieds) ++
                               (drop (ix2+1) v2ieds)
+
+-- Folds the (1st) given edge (v0,v1) in the graph onto the (2nd) given edge
+-- (v0,v2) in the graph. Both edges must have the same starting vertex and
+-- adjacent ending vertices in the cyclic order around the start vertex.
+foldEdge :: DEdge -> DEdge -> SpineGraph -> SpineGraph
+foldEdge de1@(DEdge e1 d1) de2@(DEdge e2 d2) sg@(SpineGraph vdata edata) =
+        assert (v0 == v0') $
+        assert (List.isInfixOf [e1,e2] v1ies || List.isInfixOf [e2,e1] v1ies) $
+        SpineGraph newvdata newedata
+    where (v0, v1) = Maybe.fromJust $ dirEndpoints sg de1
+          (v0',v2) = Maybe.fromJust $ dirEndpoints sg de2
+          SpineVertex v0ies _      _   = vdata M.! v0
+          SpineVertex v1ies v1ieds _   = vdata M.! v1
+          SpineVertex v2ies v2ieds v2z = vdata M.! v2
+          e1zs = Maybe.fromJust $ dirZones sg de1
+          e2zs = Maybe.fromJust $ dirZones sg de2
+          -- Build new graph:
+          -- 1. Modify the data of all edges incident to v1 to
+          -- instead have v2 as a vertex, and modifying their zone lists
+          -- accordingly. In order to fold the edges together, each edge
+          -- formerly incident to v1 must traverse all zones traversed by
+          -- (v0,v1) edge (in reverse order) followed by zones traversed by
+          -- (v0,v2) edge - except for zones shared by both these edges. Also,
+          -- remove (v0,v1) edge.
+          commonzs = commonPrefix [e1zs,e2zs]
+          newzs = (reverse $ e1zs List.\\ commonzs) ++ (e2zs List.\\ commonzs)
+          newedata = foldl moveEdge (M.delete e1 edata) $ zip v1ies v1ieds
+          moveEdge edata' (e',d') =
+            case d' of
+                 Back ->
+                   -- v1 was the 2nd vertex of edge e'
+                   M.insert e' (SpineEdge ev1 v2 $ ezs++newzs) edata'
+                 Fwd  ->
+                   -- v1 was the 1st vertex of edge e'
+                   M.insert e' (SpineEdge v2 ev2 $ (reverse newzs)++ezs) edata'
+            where SpineEdge ev1 ev2 ezs = edata M.! e'
+          -- 2. Modify incidence list at v2 to include moved edges, inserting
+          -- them above/below the location of the edge (v0,v2) in the cyclic
+          -- order (depending on whether the edge (v0,v1) lies above or below
+          -- the edge (v0,v2))
+          -- Also, remove v1 from vertices.
+          newvdata = M.insert v2 (SpineVertex newies newieds v2z) $
+              M.delete v1 vdata
+              where ix1 = Maybe.fromJust $ List.elemIndex e1 v1ies
+                    ix2 = Maybe.fromJust $ List.elemIndex e2 v2ies
+                    -- The incident edge at v1 "after" (v0,v1) in cyclic order
+                    -- becomes "first" among all edges moved to v2. All edges
+                    -- moved from v1 come (in a clump) after (v0,v2) if pushed
+                    -- from below and before if pushed from above.
+                    newies = if List.isInfixOf [e1,e2] v1ies
+                                then (take ix2 v2ies) ++
+                                     (drop (ix1+1) v1ies) ++
+                                     (take ix1 v1ies) ++
+                                     (drop ix2 v2ies)
+                                else (take (ix2-1) v2ies) ++
+                                     (drop (ix1+1) v1ies) ++
+                                     (take ix1 v1ies) ++
+                                     (drop (ix2-1) v2ies)
+                    -- Dirs follow same pattern
+                    newieds = if List.isInfixOf [e1,e2] v1ies
+                                then (take ix2 v2ieds) ++
+                                     (drop (ix1+1) v1ieds) ++
+                                     (take ix1 v1ieds) ++
+                                     (drop ix2 v2ieds)
+                                else (take (ix2-1) v2ieds) ++
+                                     (drop (ix1+1) v1ieds) ++
+                                     (take ix1 v1ieds) ++
+                                     (drop (ix2-1) v2ieds)
 
 ------------------------------------------------------------------------------
 ------------------------------------------------------------------------------
@@ -435,6 +505,7 @@ removeValenceTwo v g@(GraphMap sg@(SpineGraph vdata _) _ _) =
 
 
 ---------- 2.4 ----------
+
 -- Two functions to pull the map tight.
 
 -- Return a path which does not backtrack, by removing all parts of the path
@@ -471,6 +542,11 @@ deConstDerivative v g@(GraphMap sg@(SpineGraph vdata _) vmap emap)
               case d of
                    Fwd  -> M.adjust (List.\\commonPath) e
                    Back -> M.adjust (reverse . (List.\\commonPath) . reverse) e
+
+---------- 2.5 ----------
+
+-- Fold the given collection of directed edges, all pointing out of the same
+-- vertex. If the edges cannot be folded, error.
 
 
 -- Find all vertices of a given valence
