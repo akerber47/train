@@ -29,11 +29,27 @@ insertSubtree (Graph.Node x ts) t = Graph.Node x (ts ++ [t])
 -- was easy to write.
 commonPrefix :: (Eq a) => [[a]] -> [a]
 commonPrefix [] = []
+commonPrefix ([]:_) = []
 commonPrefix xss@((x:_):_) = if and $ map (\xs' ->
                                             not (null xs') && x == head xs')
                                           xss
                                 then x:(commonPrefix $ map tail xss)
                                 else []
+-- Find / replace elements in a list
+replaceOne :: (Eq a) => a -> a -> [a] -> [a]
+replaceOne _ _ [] = []
+replaceOne x x' (y:ys) | x == y = (x':ys)
+                       | otherwise = (y:replaceOne x x' ys)
+
+replaceAll :: (Eq a) => a -> a -> [a] -> [a]
+replaceAll x x' = map f
+    where f y | x == y    = x'
+          f y | otherwise = y
+
+replaceAllL :: (Eq a) => a -> [a] -> [a] -> [a]
+replaceAllL x xs' = concat . map f
+    where f y | x == y    = xs'
+          f y | otherwise = [y]
 
 -- A SpineGraph represents a graph which is embedded as the spine of a surface,
 -- keeping track of the data necessary to:
@@ -127,6 +143,13 @@ vertices = M.keys . vertexData
 
 edges :: SpineGraph -> [EdgeID]
 edges = M.keys . edgeData
+
+-- Generate new IDs for vertices / edges to add to an existing graph.
+newvid :: SpineGraph -> VertexID
+newvid = VertexID . (+1) . vertexID . maximum . vertices
+
+neweid :: SpineGraph -> EdgeID
+neweid = EdgeID . (+1) . edgeID . maximum . edges
 
 valence :: SpineGraph -> VertexID -> Int
 valence (SpineGraph vdata edata) v = List.length es
@@ -311,6 +334,11 @@ pathEnd sg p = Monad.liftM snd $ dirEndpoints sg (last p)
 
 revPath :: Path -> Path
 revPath p = reverse [(DEdge e (rev d)) | (DEdge e d) <- p]
+
+splitPath :: SpineGraph -> VertexID -> Path -> (Path,Path)
+splitPath sg v p =
+    (takeWhile ((/=v) . fst . Maybe.fromJust . dirEndpoints sg) p,
+     dropWhile ((/=v) . fst . Maybe.fromJust . dirEndpoints sg) p)
 
 isConsistentPath :: SpineGraph -> Path -> Bool
 isConsistentPath _ [] = True
@@ -546,7 +574,49 @@ deConstDerivative v g@(GraphMap sg@(SpineGraph vdata _) vmap emap)
 ---------- 2.5 ----------
 
 -- Fold the given collection of directed edges, all pointing out of the same
--- vertex. If the edges cannot be folded, error.
+-- vertex and all mapping to the same edge-path which does not backtrack. If
+-- the edges cannot be folded, error.
+foldEdges :: [DEdge] -> GraphMap -> GraphMap
+foldEdges [] g = assert False g
+foldEdges (de:des) g@(GraphMap sg vmap emap) =
+    assert (all (\de' -> mapDEdge g de' == mapDEdge g de) des) $
+    GraphMap newsg newvmap newemap
+    where newsg = foldl (flip $ flip foldEdge $ de) sg des
+          newvmap = foldl (flip M.delete) vmap $
+              map (snd . Maybe.fromJust . dirEndpoints sg) des
+          newemap = foldl (flip M.delete) emap $
+              map (\(DEdge e _) -> e) des
+
+---------- 2.6 ----------
+
+-- Subdivide the given edge by adding a vertex mapping to the given vertex on
+-- the right. The edge must map to a path containing that vertex on the
+-- interior, otherwise error.
+-- TODO there is an issue determining what zone the added vertex lands in. Not
+-- sure how to work this out yet, for now we just mush it (topologically) so
+-- it's in the very first zone the edge passes through.
+subdivide :: EdgeID -> VertexID -> GraphMap -> GraphMap
+subdivide e v' g@(GraphMap sg@(SpineGraph vdata edata) vmap emap) =
+    GraphMap (SpineGraph newvdata newedata) newvmap newemap
+    where (p1,p2) = splitPath sg v' $ emap M.! e
+          SpineEdge v1 v2 zs = edata M.! e
+          v = newvid sg
+          e1 = e
+          e2 = neweid sg
+          newedata = M.insert e1 (SpineEdge v1 v [head zs]) $
+                     M.insert e2 (SpineEdge v v2 zs) $ edata
+          newvdata = M.insert v (SpineVertex [e1,e2] [Back,Fwd] (head zs)) $
+                     M.adjust fix v2 $ vdata
+          fix :: SpineVertex -> SpineVertex
+          fix (SpineVertex es ds z) = SpineVertex newes ds z
+            where newes = map fst . replaceOne (e,Back) (e2,Back) $ zip es ds
+          newvmap = M.insert v v' $ vmap
+          newemap = M.insert e1 p1 $ M.insert e2 p2 $
+            M.map (replaceAllL (DEdge e Fwd)
+                               [(DEdge e1 Fwd),(DEdge e2 Fwd)]) $
+            M.map (replaceAllL (DEdge e Back)
+                               [(DEdge e2 Back),(DEdge e1 Back)]) $ emap
+
 
 
 -- Find all vertices of a given valence
