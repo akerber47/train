@@ -10,9 +10,12 @@ import Control.Exception.Base (assert)
 -- Some really general things we use:
 
 -- Yields the result of applying f until a fixed point is reached.
-untilFixed :: (Eq a) => (a -> a) -> a -> a
-untilFixed f x = fst . head . filter (uncurry (==)) $
+untilFixedBy :: (a -> a -> Bool) -> (a -> a) -> a -> a
+untilFixedBy eq f x = fst . head . filter (uncurry eq) $
         zip (iterate f x) (tail $ iterate f x)
+
+untilFixed :: (Eq a) => (a -> a) -> a -> a
+untilFixed = untilFixedBy (==)
 
 -- Apply functions across 1st and 2nd in tuple
 mapFst :: (a -> b) -> (a,c) -> (b,c)
