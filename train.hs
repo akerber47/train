@@ -1,5 +1,6 @@
 import qualified Data.List as List
 import qualified Data.Map.Lazy as M
+import qualified Data.Set as S
 import qualified Data.Maybe as Maybe
 import qualified Control.Monad as Monad
 import qualified Data.Graph as Graph
@@ -51,6 +52,12 @@ replaceAllL x xs' = concat . map f
     where f y | x == y    = xs'
           f y | otherwise = [y]
 
+-- Returns the maximum member of the (first) set in the given list of sets
+-- which contains the given element. Because I am too lazy to implement
+-- union-find properly.
+setFind :: (Ord a) => [S.Set a] -> a -> a
+setFind sets x = S.findMax . head . filter (S.member x) $ sets
+
 -- A SpineGraph represents a graph which is embedded as the spine of a surface,
 -- keeping track of the data necessary to:
 -- (1) Implement the Bestvina-Handel algorithm
@@ -77,13 +84,14 @@ newtype ZoneID   = ZoneID   { zoneID   :: Int }
     deriving (Show,Eq,Ord)
 
 data Dir = Fwd | Back -- Direction of traversal/orientation of an edge
-    deriving (Show,Eq)
+    deriving (Show,Eq,Ord)
 
 rev :: Dir -> Dir
 rev Fwd = Back
 rev Back = Fwd
 
 
+-- TODO refactor to "outgoing incident edges"
 -- Data associated with a vertex in the spine graph.
 data SpineVertex = SpineVertex
     { incidentEdges :: [EdgeID] -- in cyclic order in the embedded graph
@@ -112,7 +120,7 @@ data SpineGraph = SpineGraph
 
 -- Directed edge = edge + direction to traverse in
 data DEdge = DEdge EdgeID Dir
-    deriving (Show,Eq)
+    deriving (Show,Eq,Ord)
 
 revDEdge :: DEdge -> DEdge
 revDEdge (DEdge e d) = DEdge e (rev d)
@@ -129,6 +137,12 @@ dirZones (SpineGraph _ edata) (DEdge e d) = do
     SpineEdge _ _ zs <- M.lookup e edata
     return (case d of Fwd  -> zs
                       Back -> reverse zs)
+
+-- Get the outgoing directed edges at a given vertex, in cyclic order.
+-- Edge that loops back to the vertex will appear twice in the list.
+outdes :: SpineGraph -> VertexID -> [DEdge]
+outdes (SpineGraph vdata _) v = zipWith DEdge es ds
+    where SpineVertex es ds _ = vdata M.! v
 
 -- Create a DEdge outgoing from the given vertex and traversing the given edge.
 -- If the given vertex is not an endpoint of the edge, error.
@@ -405,6 +419,21 @@ mapDEdge (GraphMap _ _ emap) (DEdge e d) =
 derivative :: GraphMap -> DEdge -> Maybe DEdge
 derivative g = Maybe.listToMaybe . mapDEdge g
 
+-- Inverse image of derivative at given oriented edge (and given preimage
+-- vertex). Error if given vertex is not preimage of given edge's 1st vertex.
+derivativePreimage :: GraphMap -> VertexID -> DEdge -> [DEdge]
+derivativePreimage g@(GraphMap sg@(SpineGraph vdata _) _ _) v de =
+    assert (elem v $ vertexPreimage g v1) $
+        filter ((==(Just de)) . derivative g) outdes
+    where (v1,v2) = Maybe.fromJust $ dirEndpoints sg de
+          outdes = zipWith DEdge es ds
+          SpineVertex es ds _ = vdata M.! v
+
+-- All possible derivative preimages at given oriented edge.
+fullDerivativePreimage :: GraphMap -> DEdge -> [(VertexID, [DEdge])]
+fullDerivativePreimage g@(GraphMap sg _ _) de =
+    map (\v -> (v,derivativePreimage g v de)) vs
+    where vs = vertexPreimage g $ fst $ Maybe.fromJust $ dirEndpoints sg de
 
 -- Isotope the given map by pulling the image of the given vertex across the
 -- given edge and "dragging" the images of all edges incident to that vertex
@@ -694,6 +723,30 @@ findInvCycleOrForest g@(GraphMap sg@(SpineGraph vdata edata) vmap emap) =
                   newpath = ((visitmap M.! v0) ++ [de])
                   newvisitmap = M.insert v newpath visitmap
 
+
+-- Given a graph map, determine the gates. To do this, observe
+-- that in order for two elements of Lk(v) to be identified in the gate, their
+-- images under (Dg)^n must be equal for some n. This can only occur if two
+-- distinct elements of Lk(g^(n-1)(v)) are identified by Dg. Therefore we can
+-- find all such identifications / equivalences by finding all locations where
+-- Dg identifies two elements and taking repeated preimages.
+--
+-- We store the gate as a list of equivalence classes.
+computeGates :: GraphMap -> M.Map VertexID [S.Set DEdge]
+computeGates g@(GraphMap sg vmap _) = untilFixed doEqs initialGates
+  where initialGates =
+            M.fromList $ map (\v -> (v, map S.singleton $ outdes sg v)) $
+                             vertices sg
+        -- Combine any two gates whose representatives map to the same
+        -- gate. We always reduce the number of sets, so this is guaranteed
+        -- to terminate. This algo could be *much* more efficient.
+        doEqs gates = M.mapWithKey doEqsOne gates
+          where doEqsOne :: VertexID -> [S.Set DEdge] -> [S.Set DEdge]
+                doEqsOne v = map S.unions . List.groupBy sameImage
+                  where rhgate = gates M.! (vmap M.! v)
+                        sameImage s1 s2 =
+                          setFind rhgate (head $ mapDEdge g $ S.findMax s1) ==
+                          setFind rhgate (head $ mapDEdge g $ S.findMax s2)
 
 main :: IO ()
 main = print "TODO XXX"
