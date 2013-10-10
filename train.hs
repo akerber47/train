@@ -600,6 +600,14 @@ deConstDerivative v g@(GraphMap sg@(SpineGraph vdata _) vmap emap)
                    Fwd  -> M.adjust (List.\\commonPath) e
                    Back -> M.adjust (reverse . (List.\\commonPath) . reverse) e
 
+-- Pull the map tight. There's no kill like overkill.
+pullTight :: GraphMap -> GraphMap
+pullTight = deBacktrackAll . untilFixed deConstAll
+    where deBacktrackAll (GraphMap sg vmap emap) =
+              GraphMap sg vmap (M.map deBacktrack emap)
+          deConstAll g@(GraphMap sg _ _) =
+              foldl (flip deConstDerivative) g $ vertices sg
+
 ---------- 2.5 ----------
 
 -- Fold the given collection of directed edges, all pointing out of the same
