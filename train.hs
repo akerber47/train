@@ -17,6 +17,12 @@ untilFixedBy eq f x = fst . head . filter (uncurry eq) $
 untilFixed :: (Eq a) => (a -> a) -> a -> a
 untilFixed = untilFixedBy (==)
 
+-- Note that we apply until the entire "monadic environment" is fixed, not just
+-- until the value in the monad is fixed.
+untilFixedM :: (Eq (m a), Monad m) => (a -> m a) -> a -> m a
+untilFixedM f x = untilFixed (>>=f) (return x)
+
+
 -- Apply functions across 1st and 2nd in tuple
 mapFst :: (a -> b) -> (a,c) -> (b,c)
 mapFst f (x,y) = (f x, y)
@@ -658,6 +664,7 @@ subdivide e v' g@(GraphMap sg@(SpineGraph vdata edata) vmap emap) =
                                [(DEdge e2 Back),(DEdge e1 Back)]) $ emap
 
 
+------ Helper functions for section 3 ------
 
 -- Find all vertices of a given valence
 verticesOfValence :: SpineGraph -> Int -> [VertexID]
@@ -734,6 +741,20 @@ findInvCycleOrForest g@(GraphMap sg@(SpineGraph vdata edata) vmap emap) =
                   newpath = ((visitmap M.! v0) ++ [de])
                   newvisitmap = M.insert v newpath visitmap
 
+-- If such a forest was found, collapse it.
+findAndCollapse :: GraphMap -> Either Path GraphMap
+findAndCollapse g = Monad.liftM (flip collapseInvForest g) $
+    findInvCycleOrForest g
+
+-- Remove all vertices of valence one via isotopy.
+removeAllValenceOne :: GraphMap -> GraphMap
+removeAllValenceOne = untilFixed remove
+    where remove g@(GraphMap sg _ _) =
+              case verticesOfValence sg 1 of
+                   []    -> g
+                   (v:_) -> removeValenceOne v g
+
+---------- 3.1 ----------
 
 -- Given a graph map, determine the gates. To do this, observe
 -- that in order for two elements of Lk(v) to be identified in the gate, their
@@ -758,6 +779,36 @@ computeGates g@(GraphMap sg vmap _) = untilFixed doEqs initialGates
                         sameImage s1 s2 =
                           setFind rhgate (head $ mapDEdge g $ S.findMax s1) ==
                           setFind rhgate (head $ mapDEdge g $ S.findMax s2)
+
+-- Determine whether the given graph map is efficient. If not, return the
+-- offending edge (which maps to a backtracking edge under g^k, or equivalently
+-- which passes through the same gate twice at a vertex.
+-- findInefficient :: GraphMap -> Maybe DEdge
+
+---------- 3.2 ----------
+
+-- Construct a reduction or irreducible fibered surface carrying the given map.
+-- We follow steps (1)-(4) in Bestvina-Handel exactly. TODO write a remotely
+-- efficient version of this algorithm.
+-- This function is quite confusingly written. Note that all the monadic
+-- operators are just fancy function composition, and are used to allow the
+-- "fail" case (Left Path) to fall through all other functions.
+findReductionOrIrreducible :: GraphMap -> Either Path GraphMap
+findReductionOrIrreducible =
+    untilFixedM (
+        untilFixedM (
+            -- (1) Pull tight
+            (return . pullTight) Monad.>=>
+            -- (2) Collapse invariant forest
+            findAndCollapse
+        ) Monad.>=>
+        -- (3) Remove all valence one vertices
+        return . removeAllValenceOne
+    )
+
+-- Construct a reduction or an efficient fibered surface carrying the given
+-- map.
+findReductionOrEfficient :: GraphMap -> Either Path GraphMap
 
 main :: IO ()
 main = print "TODO XXX"
